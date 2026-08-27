@@ -1,49 +1,31 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "cannon-es";
 import { InputState } from "./input";
 
-const MAX_STEER = 0.5;
-const MAX_FORCE = 900;
-const BRAKE_FORCE = 12;
-const HANDBRAKE_FORCE = 40;
+const MAX_STEER = 0.55;
+const MIN_STEER = 0.22; // steering angle clamps down toward this at top speed for stability
+const STEER_SPEED_FALLOFF = 26; // m/s at which steering has fully reduced to MIN_STEER
+const MAX_FORCE = 1150;
+const BRAKE_FORCE = 22;
+const HANDBRAKE_FORCE = 46;
+const STEER_LERP_RATE = 10; // wheel-turn smoothing, independent of input smoothing
 
 const CAR_LENGTH = 3.6;
 const CAR_WIDTH = 1.8;
 
-/**
- * Builds the car's visual silhouette by extruding a hand-drawn side profile
- * (rear bumper -> trunk -> cabin -> hood -> front bumper) across the car's
- * width. This gives a proper low-poly wedge shape instead of a plain box,
- * without needing any external model file — still a placeholder in spirit,
- * but reads as a car from any angle. Swap for a glTF model later by
- * replacing buildBodyGeometry()'s call site in the constructor below.
- */
-function buildBodyGeometry(): THREE.ExtrudeGeometry {
-  const shape = new THREE.Shape();
-  // (x = position along car length, 0 = rear axle area, CAR_LENGTH = nose;
-  //  y = height above the chassis origin)
-  shape.moveTo(0.0, 0.22);
-  shape.lineTo(0.0, 0.5); // rear bumper
-  shape.lineTo(0.3, 0.62); // trunk lid
-  shape.lineTo(0.75, 0.98); // rear windshield base
-  shape.lineTo(1.35, 1.08); // roof rear
-  shape.lineTo(2.05, 1.08); // roof front
-  shape.lineTo(2.55, 0.78); // windshield front / hood junction
-  shape.lineTo(3.2, 0.55); // hood
-  shape.lineTo(CAR_LENGTH, 0.42); // front bumper top
-  shape.lineTo(CAR_LENGTH, 0.2); // front bumper bottom
-  shape.lineTo(0.0, 0.2); // flat underbody back to start
-  shape.closePath();
-
-  const geo = new THREE.ExtrudeGeometry(shape, { depth: CAR_WIDTH, bevelEnabled: false });
-  // Shape space: x=length, y=height, extrude depth=width (along shape-local Z).
-  // Rotate so length runs along the mesh's forward (+Z) axis and width along X,
-  // matching the RaycastVehicle's forward/right axes set up below.
-  geo.rotateY(-Math.PI / 2);
-  geo.translate(CAR_WIDTH / 2, 0, -CAR_LENGTH / 2);
-  geo.computeVertexNormals();
-  return geo;
-}
+// Uploaded glTF vehicle model (public/models/, served at web root by Vite).
+const MODEL_URL = "/models/vehicle.gltf";
+// The model's front/back orientation relative to the physics forward axis
+// (+Z) is not known ahead of render — flip to Math.PI if the car appears to
+// drive backwards (nose trailing rather than leading).
+const MODEL_YAW_OFFSET = 0;
+// Model's own wheels are baked into its single mesh (no separate wheel
+// nodes), so they don't rotate/steer with the physics wheels. We still keep
+// the physics RaycastVehicle's own wheel bodies for suspension/handling,
+// but their visual meshes are invisible placeholders so we don't get a
+// doubled-up wheel look next to the model's baked-in wheels.
+const gltfLoader = new GLTFLoader();
 
 export class Car {
   mesh: THREE.Group;
@@ -53,83 +35,55 @@ export class Car {
 
   constructor(scene: THREE.Scene, world: CANNON.World, startPos: THREE.Vector3, startRotY: number) {
     this.mesh = new THREE.Group();
-
-    // --- Body: extruded low-poly silhouette ---
-    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xe23d3d, roughness: 0.45, metalness: 0.25 });
-    const body = new THREE.Mesh(buildBodyGeometry(), bodyMat);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    this.mesh.add(body);
-
-    // --- Windshield / rear window: dark glass slab set into the cabin gap ---
-    const glassMat = new THREE.MeshStandardMaterial({
-      color: 0x1a2430,
-      roughness: 0.15,
-      metalness: 0.6,
-    });
-    const windshield = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.42, 0.72), glassMat);
-    windshield.position.set(0, 0.86, 0.65);
-    windshield.rotation.x = -0.5;
-    windshield.castShadow = true;
-    this.mesh.add(windshield);
-
-    const rearWindow = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.3, 0.5), glassMat);
-    rearWindow.position.set(0, 0.9, -0.55);
-    rearWindow.rotation.x = 0.55;
-    this.mesh.add(rearWindow);
-
-    // --- Headlights / taillights ---
-    const headlightMat = new THREE.MeshStandardMaterial({
-      color: 0xfff6d8,
-      emissive: 0xfff2b0,
-      emissiveIntensity: 1.1,
-      roughness: 0.3,
-    });
-    const taillightMat = new THREE.MeshStandardMaterial({
-      color: 0x4a0d0d,
-      emissive: 0xaa1111,
-      emissiveIntensity: 0.9,
-      roughness: 0.4,
-    });
-    const lightGeo = new THREE.BoxGeometry(0.28, 0.14, 0.08);
-    for (const side of [-1, 1]) {
-      const head = new THREE.Mesh(lightGeo, headlightMat);
-      head.position.set(side * 0.62, 0.4, CAR_LENGTH / 2 - 0.05);
-      this.mesh.add(head);
-
-      const tail = new THREE.Mesh(lightGeo, taillightMat);
-      tail.position.set(side * 0.62, 0.46, -CAR_LENGTH / 2 + 0.05);
-      this.mesh.add(tail);
-    }
-
-    // --- Front splitter / rear spoiler for a bit of race-car character ---
-    const trimMat = new THREE.MeshStandardMaterial({ color: 0x161619, roughness: 0.5, metalness: 0.4 });
-    const splitter = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.06, 0.35), trimMat);
-    splitter.position.set(0, 0.18, CAR_LENGTH / 2 - 0.1);
-    splitter.castShadow = true;
-    this.mesh.add(splitter);
-
-    const spoilerStandGeo = new THREE.BoxGeometry(0.08, 0.28, 0.08);
-    const spoilerWingGeo = new THREE.BoxGeometry(1.5, 0.06, 0.34);
-    for (const side of [-0.6, 0.6]) {
-      const stand = new THREE.Mesh(spoilerStandGeo, trimMat);
-      stand.position.set(side, 1.0, -CAR_LENGTH / 2 + 0.25);
-      this.mesh.add(stand);
-    }
-    const wing = new THREE.Mesh(spoilerWingGeo, trimMat);
-    wing.position.set(0, 1.16, -CAR_LENGTH / 2 + 0.25);
-    wing.castShadow = true;
-    this.mesh.add(wing);
-
-    // --- Side skirt stripe for a bit of livery without needing a texture ---
-    const stripeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 });
-    for (const side of [-1, 1]) {
-      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.12, CAR_LENGTH - 0.6), stripeMat);
-      stripe.position.set(side * (CAR_WIDTH / 2 + 0.01), 0.42, 0);
-      this.mesh.add(stripe);
-    }
-
     scene.add(this.mesh);
+
+    // --- Visual body: load the uploaded glTF vehicle model ---
+    const modelRoot = new THREE.Group();
+    modelRoot.rotation.y = MODEL_YAW_OFFSET;
+    this.mesh.add(modelRoot);
+
+    gltfLoader.load(
+      MODEL_URL,
+      (gltf) => {
+        const model = gltf.scene;
+        model.traverse((obj) => {
+          if (obj instanceof THREE.Mesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+          }
+        });
+
+        // Normalize the model into car-local space: centered on X/Z, scaled
+        // so its length matches CAR_LENGTH, and dropped so its lowest point
+        // (tires) sits near the wheel contact height used by the physics
+        // rig below (chassis-local y ≈ -0.3, matching wheel radius 0.4 at
+        // wheel mount height 0.1).
+        const box = new THREE.Box3().setFromObject(model);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        const center = new THREE.Vector3();
+        box.getCenter(center);
+
+        const longestHorizontal = Math.max(size.x, size.z);
+        const scale = longestHorizontal > 0 ? CAR_LENGTH / longestHorizontal : 1;
+        model.scale.setScalar(scale);
+
+        // Recompute box after scaling to place it accurately.
+        const scaledBox = new THREE.Box3().setFromObject(model);
+        const scaledCenter = new THREE.Vector3();
+        scaledBox.getCenter(scaledCenter);
+
+        model.position.x -= scaledCenter.x;
+        model.position.z -= scaledCenter.z;
+        model.position.y -= scaledBox.min.y + 0.3; // lowest point -> y ≈ -0.3
+
+        modelRoot.add(model);
+      },
+      undefined,
+      (err) => {
+        console.error("Failed to load vehicle model", err);
+      }
+    );
 
     // --- Physics chassis ---
     const chassisShape = new CANNON.Box(new CANNON.Vec3(0.9, 0.35, 1.8));
@@ -178,38 +132,58 @@ export class Car {
     });
     this.vehicle.addToWorld(world);
 
-    // --- Wheel visuals: tire + a smaller rim/hub cap for a bit of detail ---
-    const wheelGeo = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
-    wheelGeo.rotateZ(Math.PI / 2);
-    const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111114, roughness: 0.85 });
-
-    const rimGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.32, 8);
-    rimGeo.rotateZ(Math.PI / 2);
-    const rimMat = new THREE.MeshStandardMaterial({ color: 0xc9ccd1, roughness: 0.35, metalness: 0.7 });
-
+    // --- Wheel transform trackers: the model's wheels are baked into its
+    // single mesh and don't spin, so these stay invisible; they only exist
+    // so syncMeshes() below has something to update without special-casing.
     for (let i = 0; i < 4; i++) {
-      const w = new THREE.Group();
-      const tire = new THREE.Mesh(wheelGeo, wheelMat);
-      tire.castShadow = true;
-      const rim = new THREE.Mesh(rimGeo, rimMat);
-      w.add(tire, rim);
+      const w = new THREE.Object3D();
+      w.visible = false;
       this.wheelMeshes.push(w);
-      scene.add(w);
     }
   }
 
-  update(input: InputState) {
-    const engineForce = input.forward ? MAX_FORCE : input.backward ? -MAX_FORCE * 0.6 : 0;
-    const braking = input.backward && this.forwardSpeed() > 1 ? BRAKE_FORCE : 0;
+  private currentSteer = 0;
+
+  update(input: InputState, dt: number) {
+    const speed = this.forwardSpeed();
+
+    // Analog throttle/brake: pressing brake while moving forward brakes,
+    // pressing it while stopped/reversing lets you reverse.
+    const movingForward = speed > 0.6;
+    let engineForce = 0;
+    let braking = 0;
+    if (input.throttle > 0) {
+      engineForce = input.throttle * MAX_FORCE;
+    }
+    if (input.brake > 0) {
+      if (movingForward) {
+        braking = input.brake * BRAKE_FORCE;
+      } else {
+        engineForce = -input.brake * MAX_FORCE * 0.6;
+      }
+    }
     const handbrake = input.handbrake ? HANDBRAKE_FORCE : 0;
 
     // Rear-wheel drive
     this.vehicle.applyEngineForce(engineForce, 2);
     this.vehicle.applyEngineForce(engineForce, 3);
 
-    const steerValue = (input.left ? MAX_STEER : 0) - (input.right ? MAX_STEER : 0);
-    this.vehicle.setSteeringValue(steerValue, 0);
-    this.vehicle.setSteeringValue(steerValue, 1);
+    // Speed-sensitive steering: full lock at low speed for tight turns and
+    // easy parking-lot maneuvering, progressively tighter at speed so the
+    // car doesn't snap-spin — this matters even more on touch, where the
+    // joystick can slam to full deflection instantly.
+    const speedT = Math.min(speed / STEER_SPEED_FALLOFF, 1);
+    const steerLimit = MAX_STEER - (MAX_STEER - MIN_STEER) * speedT;
+    const targetSteer = Math.max(-1, Math.min(1, input.steer)) * steerLimit;
+
+    // Smooth the actual wheel angle toward the target so touch-joystick
+    // jitter and keyboard on/off toggling both feel analog at the wheel.
+    const diff = targetSteer - this.currentSteer;
+    const maxStep = STEER_LERP_RATE * dt;
+    this.currentSteer += Math.sign(diff) * Math.min(Math.abs(diff), maxStep);
+
+    this.vehicle.setSteeringValue(this.currentSteer, 0);
+    this.vehicle.setSteeringValue(this.currentSteer, 1);
 
     for (let i = 0; i < 4; i++) {
       this.vehicle.setBrake(braking + (i >= 2 ? handbrake : 0), i);

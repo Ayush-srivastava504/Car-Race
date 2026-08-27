@@ -9,19 +9,32 @@ import { submitScore } from "./leaderboard";
 const TOTAL_LAPS = 3;
 const BEST_TIME_KEY = "cf-car-race-best-ms";
 
+// --- Mobile detection: drives perf + camera tuning below ---
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || window.innerWidth < 820;
+const isCoarsePointer = window.matchMedia("(pointer: coarse)").matches;
+const mobileMode = isMobile || isCoarsePointer;
+
 // --- Renderer / scene / camera ---
 const app = document.getElementById("app")!;
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+const renderer = new THREE.WebGLRenderer({ antialias: !mobileMode, powerPreference: "high-performance" });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, mobileMode ? 1.5 : 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = mobileMode ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x8fd0ec);
-scene.fog = new THREE.Fog(0x8fd0ec, 120, 320);
+scene.fog = new THREE.Fog(0x8fd0ec, 100, mobileMode ? 240 : 320);
 
-const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 1000);
+// Wider FOV on phones (typically held closer, narrower screen) reads less
+// claustrophobic and shows more of the track ahead for reaction time.
+const camera = new THREE.PerspectiveCamera(
+  mobileMode ? 74 : 65,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1000
+);
 
 // Simple skybox via a large sphere with gradient-ish material
 const skyGeo = new THREE.SphereGeometry(400, 16, 16);
@@ -32,7 +45,7 @@ scene.add(new THREE.Mesh(skyGeo, skyMat));
 const sun = new THREE.DirectionalLight(0xfff2d9, 1.4);
 sun.position.set(80, 120, 40);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(mobileMode ? 1024 : 2048, mobileMode ? 1024 : 2048);
 sun.shadow.camera.left = -150;
 sun.shadow.camera.right = 150;
 sun.shadow.camera.top = 150;
@@ -78,7 +91,6 @@ function resetRace() {
   lap = 0;
   finished = false;
   raceStartTime = performance.now();
-  hud.showMessage("Go!", 1200);
 }
 
 function checkCheckpoints() {
@@ -121,8 +133,8 @@ function onRaceFinished() {
     hud.showMessage("Finished!", 3500);
   }
   window.setTimeout(() => {
-    runStartTime = performance.now();
     resetRace();
+    runCountdown();
   }, 3500);
 }
 
@@ -157,25 +169,55 @@ const clock = new THREE.Clock();
 const FIXED_STEP = 1 / 60;
 
 hud.hideLoading();
-hud.showMessage("Go!", 1500);
+
+let raceReady = false;
+runCountdown();
+
+function runCountdown() {
+  raceReady = false;
+  const steps = ["3", "2", "1", "GO!"];
+  let i = 0;
+  const tick = () => {
+    hud.showMessage(steps[i], 850);
+    i++;
+    if (i < steps.length) {
+      window.setTimeout(tick, 850);
+    } else {
+      window.setTimeout(() => {
+        raceReady = true;
+        runStartTime = performance.now();
+        raceStartTime = performance.now();
+      }, 500);
+    }
+  };
+  tick();
+}
+
+// Pause the physics/timer clock (not rendering) when the tab is hidden so a
+// backgrounded mobile browser tab doesn't rack up a huge elapsed time or let
+// physics explode from a giant catch-up delta.
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) clock.getDelta(); // discard the huge gap
+});
 
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 0.1);
 
-  car.update(input);
+  input.update(dt);
+  car.update(input, raceReady ? dt : 0);
   world.step(FIXED_STEP, dt, 5);
   car.syncMeshes();
 
   if (input.reset) {
-    runStartTime = performance.now();
     resetRace();
+    runCountdown();
   }
 
-  checkCheckpoints();
+  if (raceReady) checkCheckpoints();
   updateCamera(dt);
 
-  const elapsed = finished ? 0 : performance.now() - runStartTime;
+  const elapsed = finished || !raceReady ? 0 : performance.now() - runStartTime;
   hud.update(lap, TOTAL_LAPS, elapsed, bestTimeMs, car.speedKmh());
 
   renderer.render(scene, camera);

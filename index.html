@@ -2,9 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="theme-color" content="#0a0a0f" />
   <title>CF Car Race</title>
   <style>
+    :root {
+      --safe-t: env(safe-area-inset-top, 0px);
+      --safe-r: env(safe-area-inset-right, 0px);
+      --safe-b: env(safe-area-inset-bottom, 0px);
+      --safe-l: env(safe-area-inset-left, 0px);
+    }
     html, body {
       margin: 0;
       padding: 0;
@@ -12,17 +22,23 @@
       height: 100%;
       background: #0a0a0f;
       overflow: hidden;
+      overscroll-behavior: none;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
     }
     #app {
       position: relative;
       width: 100vw;
-      height: 100vh;
+      height: 100dvh;
     }
     canvas {
       display: block;
       width: 100%;
       height: 100%;
+      touch-action: none;
     }
     #hud {
       position: absolute;
@@ -36,37 +52,40 @@
     }
     #hud-top-left {
       position: absolute;
-      top: 16px;
-      left: 16px;
-      font-size: 14px;
-      line-height: 1.6;
-      background: rgba(0,0,0,0.35);
-      padding: 10px 14px;
+      top: calc(12px + var(--safe-t));
+      left: calc(12px + var(--safe-l));
+      font-size: 13px;
+      line-height: 1.55;
+      background: rgba(0,0,0,0.4);
+      backdrop-filter: blur(2px);
+      padding: 8px 12px;
       border-radius: 8px;
-      min-width: 160px;
+      min-width: 140px;
     }
-    #hud-top-left .row { display: flex; justify-content: space-between; gap: 16px; }
+    #hud-top-left .row { display: flex; justify-content: space-between; gap: 14px; }
     #hud-top-left .label { opacity: 0.7; }
     #speed {
       position: absolute;
-      bottom: 20px;
-      right: 20px;
-      font-size: 42px;
+      bottom: calc(20px + var(--safe-b));
+      right: calc(20px + var(--safe-r));
+      font-size: 36px;
       font-weight: 700;
-      background: rgba(0,0,0,0.35);
-      padding: 8px 18px;
+      background: rgba(0,0,0,0.4);
+      padding: 6px 16px;
       border-radius: 10px;
+      z-index: 5;
     }
-    #speed span { font-size: 16px; font-weight: 400; opacity: 0.7; margin-left: 6px; }
+    #speed span { font-size: 14px; font-weight: 400; opacity: 0.7; margin-left: 5px; }
     #msg {
       position: absolute;
-      top: 50%;
+      top: 44%;
       left: 50%;
       transform: translate(-50%, -50%);
-      font-size: 28px;
-      font-weight: 700;
+      font-size: 30px;
+      font-weight: 800;
       text-align: center;
       display: none;
+      letter-spacing: 0.02em;
     }
     #loading {
       position: absolute;
@@ -81,13 +100,126 @@
     }
     #controls-hint {
       position: absolute;
-      bottom: 16px;
-      left: 16px;
-      font-size: 12px;
-      opacity: 0.6;
+      bottom: calc(16px + var(--safe-b));
+      left: calc(16px + var(--safe-l));
+      font-size: 11px;
+      opacity: 0.55;
       background: rgba(0,0,0,0.35);
-      padding: 8px 12px;
+      padding: 7px 11px;
       border-radius: 8px;
+      max-width: 44vw;
+    }
+
+    /* ---------- Touch controls ---------- */
+    #touch-controls {
+      display: none; /* toggled to flex by input.ts if a touch device */
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 6;
+    }
+    #touch-controls .zone {
+      position: absolute;
+      pointer-events: auto;
+    }
+
+    /* Steering joystick, bottom-left */
+    #stick-base {
+      left: calc(18px + var(--safe-l));
+      bottom: calc(18px + var(--safe-b));
+      width: 118px;
+      height: 118px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.10);
+      border: 2px solid rgba(255,255,255,0.28);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #stick-knob {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.55);
+      border: 2px solid rgba(255,255,255,0.85);
+      transition: transform 0.03s linear;
+    }
+
+    /* Pedals, bottom-right */
+    #btn-brake, #btn-gas {
+      right: calc(18px + var(--safe-r));
+      width: 78px;
+      height: 78px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.3);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    }
+    #btn-gas {
+      bottom: calc(18px + var(--safe-b));
+      background: rgba(60,200,110,0.22);
+      border-color: rgba(120,255,170,0.5);
+    }
+    #btn-brake {
+      bottom: calc(110px + var(--safe-b));
+      background: rgba(220,60,60,0.2);
+      border-color: rgba(255,120,120,0.5);
+    }
+    #btn-handbrake {
+      right: calc(108px + var(--safe-r));
+      bottom: calc(18px + var(--safe-b));
+      width: 56px;
+      height: 56px;
+      border-radius: 12px;
+      background: rgba(255,200,60,0.18);
+      border: 2px solid rgba(255,210,90,0.5);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      line-height: 1.15;
+    }
+    #btn-reset {
+      top: calc(14px + var(--safe-t));
+      right: calc(14px + var(--safe-r));
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.3);
+      color: #fff;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .zone.pressed {
+      transform: scale(0.92);
+      filter: brightness(1.35);
+    }
+
+    /* Slightly smaller/tighter layout on very narrow phones */
+    @media (max-width: 380px) {
+      #hud-top-left { font-size: 11px; padding: 6px 10px; min-width: 118px; }
+      #speed { font-size: 28px; padding: 5px 12px; }
+      #stick-base { width: 100px; height: 100px; }
+      #btn-gas, #btn-brake { width: 66px; height: 66px; font-size: 11px; }
+    }
+
+    /* Landscape short-height phones: shrink vertical footprint */
+    @media (max-height: 420px) {
+      #stick-base { width: 92px; height: 92px; }
+      #btn-gas, #btn-brake { width: 62px; height: 62px; }
+      #btn-brake { bottom: calc(90px + var(--safe-b)); }
     }
   </style>
 </head>
@@ -102,7 +234,14 @@
       </div>
       <div id="speed">0<span>km/h</span></div>
       <div id="msg"></div>
-      <div id="controls-hint">WASD / Arrows to drive · Space to handbrake · R to reset</div>
+      <div id="controls-hint">WASD / Arrows · Space handbrake · R reset</div>
+    </div>
+    <div id="touch-controls">
+      <div id="stick-base" class="zone"><div id="stick-knob"></div></div>
+      <div id="btn-gas" class="zone">GAS</div>
+      <div id="btn-brake" class="zone">BRAKE</div>
+      <div id="btn-handbrake" class="zone">E-BRK</div>
+      <div id="btn-reset" class="zone">↺</div>
     </div>
   </div>
   <script type="module" src="/src/main.ts"></script>
