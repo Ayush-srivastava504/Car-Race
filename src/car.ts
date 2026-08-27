@@ -24,13 +24,17 @@ const CAR_WIDTH = 1.8;
 // Uploaded glTF vehicle model (public/models/, served at web root by Vite).
 const MODEL_URL = "/models/vehicle.gltf";
 // The model's front/back orientation relative to the physics forward axis
-// (+Z, where the front wheels are mounted). The RaycastVehicle's wheel
-// axle was previously inverted (see wheelOptions.axleLocal below), which
-// made the car actually accelerate toward -Z — i.e. backwards relative to
-// its own front wheels — no matter how this offset was set. That's now
-// fixed at the physics level, so this offset is 0 by default. If the raw
-// model asset itself happens to face -Z, flip this back to Math.PI.
-const MODEL_YAW_OFFSET = 0;
+// (+Z, where the front wheels are mounted and where applyEngineForce
+// pushes with positive throttle — see wheelOptions.axleLocal below).
+// Checked directly against the mesh geometry in vehicle.gltf: the extreme
+// -Z end is a wide, symmetric, low-profile shape (a front bumper/hood
+// nose), while the extreme +Z end is a narrow, one-sided, raised detail
+// (not a rear bumper). So the model's actual nose points toward -Z, i.e.
+// opposite the physics forward axis. Left at 0 (no correction) this makes
+// the car visually drive nose-first into reverse and tail-first into
+// "forward" — looks like pressing the gas drives backward. Rotating the
+// model 180° here aligns its real nose with +Z/the front wheels.
+const MODEL_YAW_OFFSET = Math.PI;
 // Model's own wheels are baked into its single mesh (no separate wheel
 // nodes), so they don't rotate/steer with the physics wheels. We still keep
 // the physics RaycastVehicle's own wheel bodies for suspension/handling,
@@ -187,7 +191,13 @@ export class Car {
 
     // Analog throttle/brake: pressing brake while moving forward brakes,
     // pressing it while stopped/reversing lets you reverse.
-    const movingForward = speed > 0.6;
+    // Must use SIGNED speed along the car's own forward axis here, not the
+    // unsigned magnitude forwardSpeed() returns. With the unsigned value,
+    // as soon as the car built up any reverse speed above 0.6 m/s this
+    // read as "moving forward" (magnitude doesn't know direction), so the
+    // brake pedal switched from applying reverse thrust to just braking —
+    // capping reverse at a slow crawl right after it started moving.
+    const movingForward = this.signedForwardSpeed() > 0.6;
     let engineForce = 0;
     let braking = 0;
 
@@ -242,9 +252,22 @@ export class Car {
     }
   }
 
+  /** Unsigned speed (m/s), used for the speedometer and speed-sensitive steering. */
   forwardSpeed(): number {
     const v = this.chassisBody.velocity;
     return Math.sqrt(v.x * v.x + v.z * v.z);
+  }
+
+  /**
+   * Speed (m/s) signed by direction of travel relative to the car's own
+   * forward axis (+Z): positive while actually moving forward, negative
+   * while reversing. Needed to tell "moving forward" and "reversing" apart
+   * — forwardSpeed()'s magnitude can't, since it's always positive.
+   */
+  private signedForwardSpeed(): number {
+    const v = this.chassisBody.velocity;
+    const forward = this.chassisBody.vectorToWorldFrame(new CANNON.Vec3(0, 0, 1));
+    return v.x * forward.x + v.y * forward.y + v.z * forward.z;
   }
 
   speedKmh(): number {
