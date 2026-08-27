@@ -1,0 +1,36 @@
+name = "cf-car-race"
+main = "worker/worker.ts"
+compatibility_date = "2024-09-23"
+
+# Static site output (built by `npm run build` -> dist/).
+# The `assets` binding serves everything in `directory` directly; requests
+# that don't match a file fall through to the Worker's fetch handler above
+# (this is how /api/* reaches worker/worker.ts while /, /index.html, /assets/*
+# etc. are served as static files — all on the free plan, no Pages project
+# or paid add-on required).
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
+
+# Workers KV namespace for the leaderboard. Create it once with:
+#   npx wrangler kv namespace create LEADERBOARD
+# then paste the returned `id` (and `preview_id` for `wrangler dev`) below.
+# KV is free-tier eligible; the leaderboard API works fine without it too —
+# submitScore()/fetchLeaderboard() in src/leaderboard.ts fail silently if
+# this binding isn't configured, and the game falls back to localStorage
+# for best-lap tracking.
+[[kv_namespaces]]
+binding = "LEADERBOARD"
+id = "REPLACE_WITH_KV_NAMESPACE_ID"
+preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
+
+# Free plan defaults (verify current numbers at
+# https://developers.cloudflare.com/workers/platform/limits/ before shipping):
+#   - 100,000 requests/day across all Workers on the account
+#   - 10ms CPU time per request (plenty for JSON parsing/KV read-write;
+#     nowhere near enough for server-side game simulation, which is why
+#     all physics/rendering stays client-side — see README)
+#   - KV: 100,000 reads/day, 1,000 writes/day, 1 GB stored
+#   - Static assets: served from Cloudflare's edge cache, not counted
+#     against Worker request/CPU limits in the same way
