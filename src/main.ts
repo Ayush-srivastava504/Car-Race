@@ -68,6 +68,11 @@ const car = new Car(scene, world, track.startPosition, track.startRotationY);
 const input = new InputState();
 const hud = new Hud();
 setupFullscreen();
+// Put the camera at the start line immediately, before the first physics
+// step runs. Without this the rig starts at the THREE default (world
+// origin, looking down -Z) and eases toward the car over its first
+// fraction of a second — a visible swoop in from empty sky on load.
+snapCameraTo(track.startPosition, track.startRotationY);
 
 // --- Race state ---
 let nextCheckpoint = 0;
@@ -93,6 +98,10 @@ function resetRace() {
   lap = 0;
   finished = false;
   raceStartTime = performance.now();
+  // Snap, don't ease: the car is teleported back to the line, so the rig
+  // should be there immediately too instead of smoothly flying across the
+  // whole track from its old position.
+  snapCameraTo(track.startPosition, track.startRotationY);
 }
 
 function checkCheckpoints() {
@@ -148,6 +157,16 @@ function onRaceFinished() {
 //  - the look-at target is smoothed separately from position (previously it
 //    snapped instantly to the car, which reads as jittery/twitchy rotation
 //    even when the position lerp is smooth)
+//  - the rig orientation is derived from the car's YAW ONLY, not its full
+//    3D quaternion. The chassis pitches under braking/throttle and rolls
+//    over kerbs and suspension bounce (rollInfluence is nonzero); rotating
+//    the camera offset by that full quaternion made the camera itself dive
+//    and tilt with every bump, so the horizon swims and the rig can end up
+//    aimed into the ground/sky. Rebuilding a yaw-only quaternion each frame
+//    keeps the camera level and only turns it to follow the car's heading.
+//  - the rig is snapped (no lerp) to its target on race start and on every
+//    reset/respawn instead of easing in from wherever it was, so it doesn't
+//    sweep across the track when the car is teleported back to the line.
 const BASE_FOV = mobileMode ? 74 : 65;
 const camBaseHeight = 4.5;
 const camBaseDistance = 8.5;
@@ -155,20 +174,47 @@ const camBaseLookAhead = 3;
 const desiredCamPos = new THREE.Vector3();
 const desiredLookAt = new THREE.Vector3();
 const smoothedLookAt = new THREE.Vector3();
+const upAxis = new THREE.Vector3(0, 1, 0);
+const camYawQuat = new THREE.Quaternion();
+const tmpForward = new THREE.Vector3();
+const tmpOffset = new THREE.Vector3();
 let lookAtInitialized = false;
 
+/** Yaw-only quaternion facing the same heading as `quat`, ignoring its pitch/roll. */
+function yawOnlyQuaternion(quat: THREE.Quaternion, out: THREE.Quaternion): THREE.Quaternion {
+  tmpForward.set(0, 0, 1).applyQuaternion(quat);
+  const yaw = Math.atan2(tmpForward.x, tmpForward.z);
+  return out.setFromAxisAngle(upAxis, yaw);
+}
+
+/** Place the camera rig directly behind `pos`/`rotY` with no smoothing — used on spawn/reset. */
+function snapCameraTo(pos: THREE.Vector3, rotY: number) {
+  camYawQuat.setFromAxisAngle(upAxis, rotY);
+  tmpOffset.set(0, camBaseHeight, -camBaseDistance).applyQuaternion(camYawQuat);
+  camera.position.copy(pos).add(tmpOffset);
+
+  tmpOffset.set(0, 1.2, camBaseLookAhead).applyQuaternion(camYawQuat);
+  desiredLookAt.copy(pos).add(tmpOffset);
+  smoothedLookAt.copy(desiredLookAt);
+  lookAtInitialized = true;
+  camera.lookAt(smoothedLookAt);
+
+  camera.fov = BASE_FOV;
+  camera.updateProjectionMatrix();
+}
+
 function updateCamera(dt: number) {
-  const carQuat = car.mesh.quaternion;
+  const yawQuat = yawOnlyQuaternion(car.mesh.quaternion, camYawQuat);
   const speedT = Math.min(car.forwardSpeed() / 30, 1); // 0..1 up to ~30 m/s
   const boostT = car.boostActive ? 1 : 0;
 
   const distance = camBaseDistance + speedT * 2.2 + boostT * 1.6;
   const height = camBaseHeight + speedT * 0.5;
-  const offset = new THREE.Vector3(0, height, -distance).applyQuaternion(carQuat);
+  const offset = tmpOffset.set(0, height, -distance).applyQuaternion(yawQuat);
   desiredCamPos.copy(car.mesh.position).add(offset);
 
   const lookAhead = camBaseLookAhead + speedT * 3.5;
-  const lookOffset = new THREE.Vector3(0, 1.2, lookAhead).applyQuaternion(carQuat);
+  const lookOffset = tmpOffset.set(0, 1.2, lookAhead).applyQuaternion(yawQuat);
   desiredLookAt.copy(car.mesh.position).add(lookOffset);
 
   const posLerp = 1 - Math.pow(0.001, dt); // frame-rate independent smoothing
