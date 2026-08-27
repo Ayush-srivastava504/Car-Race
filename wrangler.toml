@@ -1,4 +1,4 @@
-name = "cf-car-race"
+name = "car-race"
 main = "worker/worker.ts"
 compatibility_date = "2024-09-23"
 
@@ -34,7 +34,3 @@ preview_id = "f4ec4e793cae4ee0804884f845bcb6f7"
 #   - KV: 100,000 reads/day, 1,000 writes/day, 1 GB stored
 #   - Static assets: served from Cloudflare's edge cache, not counted
 #     against Worker request/CPU limits in the same way
-[[kv_namespaces]]
-binding = "LEADERBOARD"
-id = "2163595386bb41859abda3c484ca81f7"
-preview_id = "f4ec4e793cae4ee0804884f845bcb6f7"
