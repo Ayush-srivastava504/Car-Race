@@ -22,8 +22,8 @@ not_found_handling = "single-page-application"
 # for best-lap tracking.
 [[kv_namespaces]]
 binding = "LEADERBOARD"
-id = "REPLACE_WITH_KV_NAMESPACE_ID"
-preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
+id = "2163595386bb41859abda3c484ca81f7"
+preview_id = "f4ec4e793cae4ee0804884f845bcb6f7"
 
 # Free plan defaults (verify current numbers at
 # https://developers.cloudflare.com/workers/platform/limits/ before shipping):
@@ -34,3 +34,7 @@ preview_id = "REPLACE_WITH_KV_PREVIEW_ID"
 #   - KV: 100,000 reads/day, 1,000 writes/day, 1 GB stored
 #   - Static assets: served from Cloudflare's edge cache, not counted
 #     against Worker request/CPU limits in the same way
+[[kv_namespaces]]
+binding = "LEADERBOARD"
+id = "2163595386bb41859abda3c484ca81f7"
+preview_id = "f4ec4e793cae4ee0804884f845bcb6f7"
