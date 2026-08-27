@@ -19,7 +19,7 @@ const MODEL_URL = "/models/vehicle.gltf";
 // The model's front/back orientation relative to the physics forward axis
 // (+Z) is not known ahead of render — flip to Math.PI if the car appears to
 // drive backwards (nose trailing rather than leading).
-const MODEL_YAW_OFFSET = 0;
+const MODEL_YAW_OFFSET = Math.PI;
 // Model's own wheels are baked into its single mesh (no separate wheel
 // nodes), so they don't rotate/steer with the physics wheels. We still keep
 // the physics RaycastVehicle's own wheel bodies for suspension/handling,
