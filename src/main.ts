@@ -5,6 +5,7 @@ import { buildTrack } from "./track";
 import { Car } from "./car";
 import { Hud } from "./hud";
 import { submitScore } from "./leaderboard";
+import { setupFullscreen } from "./fullscreen";
 
 const TOTAL_LAPS = 3;
 const BEST_TIME_KEY = "cf-car-race-best-ms";
@@ -66,6 +67,7 @@ scene.add(track.group);
 const car = new Car(scene, world, track.startPosition, track.startRotationY);
 const input = new InputState();
 const hud = new Hud();
+setupFullscreen();
 
 // --- Race state ---
 let nextCheckpoint = 0;

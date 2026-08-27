@@ -243,6 +243,32 @@
       align-items: center;
       justify-content: center;
     }
+    #btn-fullscreen {
+      position: absolute;
+      top: calc(14px + var(--safe-t));
+      right: calc(62px + var(--safe-r));
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.12);
+      border: 2px solid rgba(255,255,255,0.3);
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      pointer-events: auto;
+      z-index: 7;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s ease, transform 0.1s ease;
+    }
+    #btn-fullscreen.active {
+      background: rgba(124,92,255,0.28);
+      border-color: rgba(160,140,255,0.6);
+    }
+    #btn-fullscreen:active {
+      transform: scale(0.9);
+    }
     .zone.pressed {
       transform: scale(0.92);
       filter: brightness(1.35);
@@ -277,6 +303,7 @@
       <div id="boost"><div id="boost-fill"></div></div>
       <div id="msg"></div>
       <div id="controls-hint">WASD / Arrows · Shift boost · Space handbrake · R reset</div>
+      <button id="btn-fullscreen" aria-label="Enter fullscreen"></button>
     </div>
     <div id="touch-controls">
       <div id="stick-base" class="zone"><div id="stick-knob"></div></div>
