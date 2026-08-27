@@ -252,8 +252,21 @@ export class Car {
   }
 
   syncMeshes() {
-    this.mesh.position.copy(this.chassisBody.position as unknown as THREE.Vector3);
-    this.mesh.quaternion.copy(this.chassisBody.quaternion as unknown as THREE.Quaternion);
+    // Use the physics engine's *interpolated* transform, not the raw one.
+    // world.step() in main.ts is called in its 3-arg "interpolation" mode
+    // (fixed dt + real elapsed time), which runs physics at a fixed 60Hz
+    // internally but only fully advances chassisBody.position/quaternion
+    // once per completed sub-step. Copying that raw value straight into the
+    // mesh means the visual only updates in discrete ~16.7ms jumps, out of
+    // phase with requestAnimationFrame — which reads as juddery/shaky
+    // movement, especially on 90/120Hz phone displays where several render
+    // frames land between physics steps. interpolatedPosition/Quaternion
+    // are exactly what cannon-es computes each call to bridge that gap:
+    // a blend between the previous and current physics state based on how
+    // far into the next step we are, so the car moves smoothly every frame
+    // regardless of the display's refresh rate.
+    this.mesh.position.copy(this.chassisBody.interpolatedPosition as unknown as THREE.Vector3);
+    this.mesh.quaternion.copy(this.chassisBody.interpolatedQuaternion as unknown as THREE.Quaternion);
 
     for (let i = 0; i < this.vehicle.wheelInfos.length; i++) {
       this.vehicle.updateWheelTransform(i);

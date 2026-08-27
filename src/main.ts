@@ -236,7 +236,12 @@ function animate() {
 
   input.update(dt);
   car.update(input, raceReady ? dt : 0);
-  world.step(FIXED_STEP, dt, 5);
+  // maxSubSteps must cover the worst-case clamped dt (0.1s) / FIXED_STEP
+  // (~0.0167s) = 6 sub-steps, or a frame hitch permanently eats into the
+  // physics clock and the sim quietly runs in slow motion afterward (reads
+  // as persistent "lag" that never recovers). 10 matches cannon-es's own
+  // default and leaves headroom.
+  world.step(FIXED_STEP, dt, 10);
   car.syncMeshes();
 
   if (input.reset) {
