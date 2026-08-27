@@ -76,6 +76,30 @@
       z-index: 5;
     }
     #speed span { font-size: 14px; font-weight: 400; opacity: 0.7; margin-left: 5px; }
+    #boost {
+      position: absolute;
+      bottom: calc(70px + var(--safe-b));
+      right: calc(20px + var(--safe-r));
+      width: 140px;
+      height: 10px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.4);
+      border: 1px solid rgba(255,255,255,0.25);
+      overflow: hidden;
+      z-index: 5;
+    }
+    #boost-fill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, #4fd1ff, #7c5cff);
+      transition: background 0.15s ease;
+    }
+    #boost.active #boost-fill {
+      background: linear-gradient(90deg, #ffd24f, #ff6a3d);
+    }
+    #boost.low #boost-fill {
+      background: #7a4dff44;
+    }
     #msg {
       position: absolute;
       top: 44%;
@@ -188,6 +212,23 @@
       text-align: center;
       line-height: 1.15;
     }
+    #btn-boost {
+      right: calc(108px + var(--safe-r));
+      bottom: calc(80px + var(--safe-b));
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: rgba(124,92,255,0.22);
+      border: 2px solid rgba(160,140,255,0.55);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      line-height: 1.15;
+    }
     #btn-reset {
       top: calc(14px + var(--safe-t));
       right: calc(14px + var(--safe-r));
@@ -233,14 +274,16 @@
         <div class="row"><span class="label">Best</span><span id="best">--:--.---</span></div>
       </div>
       <div id="speed">0<span>km/h</span></div>
+      <div id="boost"><div id="boost-fill"></div></div>
       <div id="msg"></div>
-      <div id="controls-hint">WASD / Arrows · Space handbrake · R reset</div>
+      <div id="controls-hint">WASD / Arrows · Shift boost · Space handbrake · R reset</div>
     </div>
     <div id="touch-controls">
       <div id="stick-base" class="zone"><div id="stick-knob"></div></div>
       <div id="btn-gas" class="zone">GAS</div>
       <div id="btn-brake" class="zone">BRAKE</div>
       <div id="btn-handbrake" class="zone">E-BRK</div>
+      <div id="btn-boost" class="zone">BOOST</div>
       <div id="btn-reset" class="zone">↺</div>
     </div>
   </div>

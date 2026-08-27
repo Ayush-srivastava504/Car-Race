@@ -139,22 +139,50 @@ function onRaceFinished() {
 }
 
 // --- Camera follow (third-person chase, smoothed) ---
-const camOffset = new THREE.Vector3(0, 4.5, -8.5);
-const camLookOffset = new THREE.Vector3(0, 1.2, 3);
+// Improvements over the original fixed-offset follow:
+//  - distance/height pull back a touch at speed (and further on boost) for
+//    more forward visibility and a better sense of speed
+//  - dynamic FOV widens with speed/boost instead of staying static
+//  - the look-at target is smoothed separately from position (previously it
+//    snapped instantly to the car, which reads as jittery/twitchy rotation
+//    even when the position lerp is smooth)
+const BASE_FOV = mobileMode ? 74 : 65;
+const camBaseHeight = 4.5;
+const camBaseDistance = 8.5;
+const camBaseLookAhead = 3;
 const desiredCamPos = new THREE.Vector3();
 const desiredLookAt = new THREE.Vector3();
+const smoothedLookAt = new THREE.Vector3();
+let lookAtInitialized = false;
 
 function updateCamera(dt: number) {
   const carQuat = car.mesh.quaternion;
-  const offset = camOffset.clone().applyQuaternion(carQuat);
+  const speedT = Math.min(car.forwardSpeed() / 30, 1); // 0..1 up to ~30 m/s
+  const boostT = car.boostActive ? 1 : 0;
+
+  const distance = camBaseDistance + speedT * 2.2 + boostT * 1.6;
+  const height = camBaseHeight + speedT * 0.5;
+  const offset = new THREE.Vector3(0, height, -distance).applyQuaternion(carQuat);
   desiredCamPos.copy(car.mesh.position).add(offset);
 
-  const lookOffset = camLookOffset.clone().applyQuaternion(carQuat);
+  const lookAhead = camBaseLookAhead + speedT * 3.5;
+  const lookOffset = new THREE.Vector3(0, 1.2, lookAhead).applyQuaternion(carQuat);
   desiredLookAt.copy(car.mesh.position).add(lookOffset);
 
-  const lerpFactor = 1 - Math.pow(0.001, dt); // frame-rate independent smoothing
-  camera.position.lerp(desiredCamPos, lerpFactor);
-  camera.lookAt(desiredLookAt);
+  const posLerp = 1 - Math.pow(0.001, dt); // frame-rate independent smoothing
+  camera.position.lerp(desiredCamPos, posLerp);
+
+  if (!lookAtInitialized) {
+    smoothedLookAt.copy(desiredLookAt);
+    lookAtInitialized = true;
+  }
+  const lookLerp = 1 - Math.pow(0.02, dt);
+  smoothedLookAt.lerp(desiredLookAt, lookLerp);
+  camera.lookAt(smoothedLookAt);
+
+  const targetFov = BASE_FOV + speedT * 8 + boostT * 6;
+  camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 4);
+  camera.updateProjectionMatrix();
 }
 
 // --- Resize handling ---
@@ -219,6 +247,7 @@ function animate() {
 
   const elapsed = finished || !raceReady ? 0 : performance.now() - runStartTime;
   hud.update(lap, TOTAL_LAPS, elapsed, bestTimeMs, car.speedKmh());
+  hud.updateBoost(car.boostEnergy / 100, car.boostActive);
 
   renderer.render(scene, camera);
 }

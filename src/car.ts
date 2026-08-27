@@ -11,15 +11,26 @@ const BRAKE_FORCE = 22;
 const HANDBRAKE_FORCE = 46;
 const STEER_LERP_RATE = 10; // wheel-turn smoothing, independent of input smoothing
 
+// --- Boost / nitro ---
+const BOOST_MAX = 100;
+const BOOST_MULTIPLIER = 1.55; // engine force multiplier while boosting
+const BOOST_DRAIN_PER_SEC = 42; // ~2.4s of full boost from a full tank
+const BOOST_REGEN_PER_SEC = 11; // ~9s to refill from empty when not boosting
+const BOOST_REGEN_DELAY = 0.6; // seconds after releasing boost before regen kicks in
+
 const CAR_LENGTH = 3.6;
 const CAR_WIDTH = 1.8;
 
 // Uploaded glTF vehicle model (public/models/, served at web root by Vite).
 const MODEL_URL = "/models/vehicle.gltf";
 // The model's front/back orientation relative to the physics forward axis
-// (+Z) is not known ahead of render — flip to Math.PI if the car appears to
-// drive backwards (nose trailing rather than leading).
-const MODEL_YAW_OFFSET = Math.PI;
+// (+Z, where the front wheels are mounted). The RaycastVehicle's wheel
+// axle was previously inverted (see wheelOptions.axleLocal below), which
+// made the car actually accelerate toward -Z — i.e. backwards relative to
+// its own front wheels — no matter how this offset was set. That's now
+// fixed at the physics level, so this offset is 0 by default. If the raw
+// model asset itself happens to face -Z, flip this back to Math.PI.
+const MODEL_YAW_OFFSET = 0;
 // Model's own wheels are baked into its single mesh (no separate wheel
 // nodes), so they don't rotate/steer with the physics wheels. We still keep
 // the physics RaycastVehicle's own wheel bodies for suspension/handling,
@@ -86,9 +97,14 @@ export class Car {
     );
 
     // --- Physics chassis ---
+    // Shape offset kept low (close to the wheel-mount plane at local y=0.1)
+    // so the center of mass sits near the axle line instead of far above
+    // it. Previously offset 0.5 up put the CoM well above the suspension,
+    // which reads as heavy/pitchy — exaggerated nose-dive under braking and
+    // squat under acceleration, and sluggish rotation overall.
     const chassisShape = new CANNON.Box(new CANNON.Vec3(0.9, 0.35, 1.8));
     this.chassisBody = new CANNON.Body({ mass: 150 });
-    this.chassisBody.addShape(chassisShape, new CANNON.Vec3(0, 0.5, 0));
+    this.chassisBody.addShape(chassisShape, new CANNON.Vec3(0, 0.15, 0));
     this.chassisBody.position.set(startPos.x, startPos.y + 0.5, startPos.z);
     this.chassisBody.quaternion.setFromEuler(0, startRotY, 0);
     this.chassisBody.angularVelocity.set(0, 0, 0);
@@ -112,7 +128,14 @@ export class Car {
       dampingCompression: 4.5,
       maxSuspensionForce: 100000,
       rollInfluence: 0.02,
-      axleLocal: new CANNON.Vec3(1, 0, 0),
+      // cannon-es derives each wheel's forward direction as
+      // groundNormal x axleLocal, so with indexRightAxis=0 / indexUpAxis=1
+      // an axle of (1,0,0) resolves to forward = (0,0,-1) — i.e. positive
+      // engine force pushed the chassis toward -Z, away from the front
+      // wheels (mounted at +Z below). That's the "driving backwards" bug.
+      // Flipping the axle to (-1,0,0) makes forward resolve to +Z, which
+      // matches where the front wheels actually are.
+      axleLocal: new CANNON.Vec3(-1, 0, 0),
       chassisConnectionPointLocal: new CANNON.Vec3(),
       maxSuspensionTravel: 0.25,
       customSlidingRotationalSpeed: -30,
@@ -144,6 +167,12 @@ export class Car {
 
   private currentSteer = 0;
 
+  /** 0..BOOST_MAX energy remaining in the nitro tank. */
+  boostEnergy = BOOST_MAX;
+  /** True while boost is actively being applied this frame (for camera/HUD). */
+  boostActive = false;
+  private boostRegenCooldown = 0;
+
   update(input: InputState, dt: number) {
     const speed = this.forwardSpeed();
 
@@ -152,8 +181,22 @@ export class Car {
     const movingForward = speed > 0.6;
     let engineForce = 0;
     let braking = 0;
+
+    // --- Nitro boost: only while actively accelerating forward and fuel
+    // remains. Drains while held, regenerates after a short delay once
+    // released (or once the tank runs dry).
+    this.boostActive = input.boost && input.throttle > 0 && this.boostEnergy > 0;
+    if (this.boostActive) {
+      this.boostEnergy = Math.max(0, this.boostEnergy - BOOST_DRAIN_PER_SEC * dt);
+      this.boostRegenCooldown = BOOST_REGEN_DELAY;
+    } else if (this.boostRegenCooldown > 0) {
+      this.boostRegenCooldown = Math.max(0, this.boostRegenCooldown - dt);
+    } else {
+      this.boostEnergy = Math.min(BOOST_MAX, this.boostEnergy + BOOST_REGEN_PER_SEC * dt);
+    }
+
     if (input.throttle > 0) {
-      engineForce = input.throttle * MAX_FORCE;
+      engineForce = input.throttle * MAX_FORCE * (this.boostActive ? BOOST_MULTIPLIER : 1);
     }
     if (input.brake > 0) {
       if (movingForward) {

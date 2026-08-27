@@ -14,6 +14,7 @@ export class InputState {
   throttle = 0;
   brake = 0;
   handbrake = false;
+  boost = false;
   reset = false;
 
   // Raw digital key state, eased toward -1/0/1 each frame for a less twitchy
@@ -30,6 +31,7 @@ export class InputState {
       this.throttle = 0;
       this.brake = 0;
       this.handbrake = false;
+      this.boost = false;
     });
 
     this.setupTouchControls();
@@ -52,6 +54,7 @@ export class InputState {
     this.brake = back ? 1 : 0;
     this.steerTarget = (left ? -1 : 0) + (right ? 1 : 0);
     this.handbrake = this.keys.has(" ");
+    this.boost = this.keys.has("shift");
     this.reset = this.keys.has("r");
   }
 
@@ -156,6 +159,7 @@ export class InputState {
     bindHold("btn-gas", () => (this.throttle = 1), () => (this.throttle = 0));
     bindHold("btn-brake", () => (this.brake = 1), () => (this.brake = 0));
     bindHold("btn-handbrake", () => (this.handbrake = true), () => (this.handbrake = false));
+    bindHold("btn-boost", () => (this.boost = true), () => (this.boost = false));
 
     const resetBtn = document.getElementById("btn-reset");
     resetBtn?.addEventListener("touchstart", (e) => {

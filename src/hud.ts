@@ -13,6 +13,8 @@ export class Hud {
   private speedEl = document.getElementById("speed")!;
   private msgEl = document.getElementById("msg")!;
   private loadingEl = document.getElementById("loading")!;
+  private boostFillEl = document.getElementById("boost-fill")!;
+  private boostWrapEl = document.getElementById("boost")!;
 
   hideLoading() {
     this.loadingEl.style.display = "none";
@@ -23,6 +25,12 @@ export class Hud {
     this.timeEl.textContent = formatTime(elapsedMs);
     this.bestEl.textContent = bestMs !== null ? formatTime(bestMs) : "--:--.---";
     this.speedEl.innerHTML = `${Math.round(speedKmh)}<span>km/h</span>`;
+  }
+
+  updateBoost(energyPct: number, active: boolean) {
+    this.boostFillEl.style.width = `${Math.max(0, Math.min(1, energyPct)) * 100}%`;
+    this.boostWrapEl.classList.toggle("active", active);
+    this.boostWrapEl.classList.toggle("low", energyPct < 0.2 && !active);
   }
 
   showMessage(text: string, durationMs = 2500) {
