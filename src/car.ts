@@ -123,7 +123,16 @@ export class Car {
       directionLocal: new CANNON.Vec3(0, -1, 0),
       suspensionStiffness: 35,
       suspensionRestLength: 0.35,
-      frictionSlip: 2.2,
+      // cannon-es caps each wheel's usable grip per step at
+      // suspensionForce * timestep * frictionSlip (see updateFriction in
+      // the library). At the old value of 2.2 that ceiling was ~13.5
+      // impulse-units per rear wheel at rest, while full-throttle forward
+      // was demanding ~19 — so forward power was constantly being clipped
+      // back down to the grip limit (wheelspin/bogging). Reverse only ever
+      // requests 60% of MAX_FORCE, which happened to land under that same
+      // low ceiling, so it launched clean while forward didn't. Raised so
+      // forward has real headroom (including with boost active).
+      frictionSlip: 6.2,
       dampingRelaxation: 2.5,
       dampingCompression: 4.5,
       maxSuspensionForce: 100000,
