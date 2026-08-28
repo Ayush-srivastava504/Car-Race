@@ -13,6 +13,7 @@ export interface TrackData {
   startPosition: THREE.Vector3;
   startRotationY: number;
   groundBody: CANNON.Body;
+  roadBodies: CANNON.Body[];
   barrierBodies: CANNON.Body[];
   centerline: THREE.Vector3[];
   roadWidth: number;
@@ -50,6 +51,12 @@ export function buildTrack(world: CANNON.World): TrackData {
 
   const rawPoints = buildWaypoints();
   const smoothPoints = catmullRomLoop(rawPoints, 20);
+
+  // A closed curve returns the start point again at t=1. Remove that duplicate
+  // so no zero-length segment can create degenerate physics geometry.
+  if (smoothPoints.length > 1 && smoothPoints[0].distanceTo(smoothPoints[smoothPoints.length - 1]) < 1e-6) {
+    smoothPoints.pop();
+  }
 
   // --- Ground plane (grass) ---
   const groundGeo = new THREE.PlaneGeometry(400, 400);
@@ -104,41 +111,123 @@ export function buildTrack(world: CANNON.World): TrackData {
   road.receiveShadow = true;
   group.add(road);
 
-  // Physical road surface (thin static box track wouldn't match the curve well,
-  // so we rely on the ground plane for driving physics and only use the visual
-  // ribbon to indicate the track; off-track detection is done via UV distance
-  // check in the game loop against smoothPoints).
+  // --- Physical road surface ---
+  // The visible road is curved, so the physics road must follow the same curve.
+  // Previously the car was supported only by the flat grass plane. Once the
+  // chassis dropped below Y=0, all wheel raycasts could start below the plane
+  // and report AIR forever.
+  //
+  // Use dense, overlapping static boxes as a reliable Cannon driving surface.
+  // They are slightly wider than the visual ribbon so wheel rays cannot miss
+  // because of tiny edge differences, while off-track behavior is still
+  // controlled separately by centerline distance in main.ts.
+  const roadBodies: CANNON.Body[] = [];
+  const ROAD_PHYSICS_WIDTH = roadWidth + 0.8;
+  const ROAD_PHYSICS_THICKNESS = 0.16;
+  const ROAD_SURFACE_Y = 0.08;
+  const ROAD_SEGMENT_OVERLAP = 0.10;
 
-  // --- Barriers (instanced boxes along both edges) ---
+  for (let i = 0; i < n; i++) {
+    const a = smoothPoints[i];
+    const b = smoothPoints[(i + 1) % n];
+    const segment = b.clone().sub(a);
+    const length = segment.length();
+    if (length < 1e-4) continue;
+
+    const dir = segment.clone().normalize();
+    const rotY = Math.atan2(dir.x, dir.z);
+    const mid = a.clone().add(b).multiplyScalar(0.5);
+
+    const body = new CANNON.Body({ type: CANNON.Body.STATIC });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(
+      ROAD_PHYSICS_WIDTH / 2,
+      ROAD_PHYSICS_THICKNESS / 2,
+      length / 2 + ROAD_SEGMENT_OVERLAP,
+    )));
+    body.position.set(
+      mid.x,
+      ROAD_SURFACE_Y - ROAD_PHYSICS_THICKNESS / 2,
+      mid.z,
+    );
+    body.quaternion.setFromEuler(0, rotY, 0);
+    world.addBody(body);
+    roadBodies.push(body);
+  }
+
+  // --- Barriers (visuals + matching physics) ---
   const barrierGeo = new THREE.BoxGeometry(1.2, 0.9, 2.2);
   const barrierMat = new THREE.MeshStandardMaterial({ color: 0xd94040, roughness: 0.6 });
-  const barrierStep = 3; // place a barrier every N loop samples
+  const barrierStep = 3;
   const barrierPositions: { pos: THREE.Vector3; rotY: number }[] = [];
+
+  const leftBarrierPts: THREE.Vector3[] = [];
+  const rightBarrierPts: THREE.Vector3[] = [];
+  for (let i = 0; i < n; i++) {
+    const cur = smoothPoints[i];
+    const next = smoothPoints[(i + 1) % n];
+    const dir = next.clone().sub(cur).normalize();
+    const side = new THREE.Vector3().crossVectors(up, dir).normalize();
+    leftBarrierPts.push(left[i].clone().add(side.clone().multiplyScalar(0.6)));
+    rightBarrierPts.push(right[i].clone().add(side.clone().multiplyScalar(-0.6)));
+  }
 
   for (let i = 0; i < n; i += barrierStep) {
     const cur = smoothPoints[i];
     const next = smoothPoints[(i + 1) % n];
     const dir = next.clone().sub(cur).normalize();
     const rotY = Math.atan2(dir.x, dir.z);
-    const side = new THREE.Vector3().crossVectors(up, dir).normalize();
-    barrierPositions.push({ pos: left[i].clone().add(side.clone().multiplyScalar(0.6)), rotY });
-    barrierPositions.push({ pos: right[i].clone().add(side.clone().multiplyScalar(-0.6)), rotY });
+    barrierPositions.push({ pos: leftBarrierPts[i], rotY });
+    barrierPositions.push({ pos: rightBarrierPts[i], rotY });
   }
 
   const instanced = new THREE.InstancedMesh(barrierGeo, barrierMat, barrierPositions.length);
   instanced.castShadow = true;
   const dummy = new THREE.Object3D();
-  const barrierBodies: CANNON.Body[] = [];
   barrierPositions.forEach((b, idx) => {
     dummy.position.copy(b.pos);
     dummy.position.y = 0.45;
     dummy.rotation.set(0, b.rotY, 0);
     dummy.updateMatrix();
     instanced.setMatrixAt(idx, dummy.matrix);
-
   });
-
+  instanced.instanceMatrix.needsUpdate = true;
   group.add(instanced);
+
+  // Dense static collision chains follow the same edge points as the visuals.
+  // The small overlap prevents gaps at segment joins and keeps curved corners
+  // from producing invisible hooks that can catch the car.
+  const BARRIER_HEIGHT = 1.0;
+  const BARRIER_THICKNESS = 0.4;
+  const BARRIER_SEGMENT_OVERLAP = 0.12;
+  const barrierBodies: CANNON.Body[] = [];
+
+  function addBarrierChain(points: THREE.Vector3[]) {
+    for (let i = 0; i < n; i++) {
+      const a = points[i];
+      const b = points[(i + 1) % n];
+      const seg = b.clone().sub(a);
+      const length = seg.length();
+      if (length < 1e-4) continue;
+
+      const dir = seg.clone().normalize();
+      const rotY = Math.atan2(dir.x, dir.z);
+      const mid = a.clone().add(b).multiplyScalar(0.5);
+
+      const body = new CANNON.Body({ type: CANNON.Body.STATIC });
+      body.addShape(new CANNON.Box(new CANNON.Vec3(
+        BARRIER_THICKNESS / 2,
+        BARRIER_HEIGHT / 2,
+        length / 2 + BARRIER_SEGMENT_OVERLAP,
+      )));
+      body.position.set(mid.x, BARRIER_HEIGHT / 2, mid.z);
+      body.quaternion.setFromEuler(0, rotY, 0);
+      world.addBody(body);
+      barrierBodies.push(body);
+    }
+  }
+
+  addBarrierChain(leftBarrierPts);
+  addBarrierChain(rightBarrierPts);
 
   // --- Decorative trees (instanced cones+cylinders kept simple as cones) ---
   const treeGeo = new THREE.ConeGeometry(1.6, 4, 6);
@@ -190,6 +279,7 @@ export function buildTrack(world: CANNON.World): TrackData {
     startPosition: start.clone().setY(0.6),
     startRotationY,
     groundBody,
+    roadBodies,
     barrierBodies,
     centerline: smoothPoints,
     roadWidth,
