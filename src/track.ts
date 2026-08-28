@@ -14,6 +14,8 @@ export interface TrackData {
   startRotationY: number;
   groundBody: CANNON.Body;
   barrierBodies: CANNON.Body[];
+  centerline: THREE.Vector3[];
+  roadWidth: number;
 }
 
 // Generate a closed-loop set of waypoints (a simple stadium/oval-ish circuit
@@ -134,15 +136,8 @@ export function buildTrack(world: CANNON.World): TrackData {
     dummy.updateMatrix();
     instanced.setMatrixAt(idx, dummy.matrix);
 
-    const body = new CANNON.Body({
-      type: CANNON.Body.STATIC,
-      shape: new CANNON.Box(new CANNON.Vec3(0.6, 0.45, 1.1)),
-      position: new CANNON.Vec3(b.pos.x, 0.45, b.pos.z),
-    });
-    body.quaternion.setFromEuler(0, b.rotY, 0);
-    world.addBody(body);
-    barrierBodies.push(body);
   });
+
   group.add(instanced);
 
   // --- Decorative trees (instanced cones+cylinders kept simple as cones) ---
@@ -196,5 +191,7 @@ export function buildTrack(world: CANNON.World): TrackData {
     startRotationY,
     groundBody,
     barrierBodies,
+    centerline: smoothPoints,
+    roadWidth,
   };
 }

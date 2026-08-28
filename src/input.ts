@@ -1,40 +1,35 @@
+export const isTouchDevice =
+  "ontouchstart" in window || navigator.maxTouchPoints > 0;
+
 /**
- * InputState now exposes ANALOG values so the same field drives both
- * keyboard (digital, but eased) and touch (truly analog: joystick drag
- * distance, pedal press). This is the biggest lever for mobile feel —
- * binary steering feels awful on a touchscreen.
- *
- *   steer:    -1 (full left) .. 1 (full right)
- *   throttle:  0 .. 1
- *   brake:     0 .. 1
- *   handbrake: boolean (still digital, that's fine for a handbrake)
+ * Unified input state for keyboard AND touch. Touch buttons register
+ * themselves via bindHoldButton() and simply set/clear the same boolean
+ * flags keyboard does, so Car.update() never needs to know the source.
  */
 export class InputState {
-  steer = 0;
-  throttle = 0;
-  brake = 0;
+  forward = false;
+  backward = false;
+  left = false;
+  right = false;
   handbrake = false;
-  boost = false;
   reset = false;
 
-  // Raw digital key state, eased toward -1/0/1 each frame for a less twitchy
-  // keyboard feel that roughly matches touch responsiveness.
   private keys = new Set<string>();
-  private steerTarget = 0;
+  // Per-source flags so a touch button and a key can independently hold
+  // the same action without one release cancelling the other.
+  private touchForward = false;
+  private touchBackward = false;
+  private touchLeft = false;
+  private touchRight = false;
+  private touchHandbrake = false;
 
   constructor() {
     window.addEventListener("keydown", (e) => this.onKey(e, true));
     window.addEventListener("keyup", (e) => this.onKey(e, false));
     window.addEventListener("blur", () => {
       this.keys.clear();
-      this.steerTarget = 0;
-      this.throttle = 0;
-      this.brake = 0;
-      this.handbrake = false;
-      this.boost = false;
+      this.recompute();
     });
-
-    this.setupTouchControls();
   }
 
   private onKey(e: KeyboardEvent, down: boolean) {
@@ -44,128 +39,75 @@ export class InputState {
     }
     if (down) this.keys.add(k);
     else this.keys.delete(k);
+    this.recompute();
+  }
 
-    const fwd = this.keys.has("w") || this.keys.has("arrowup");
-    const back = this.keys.has("s") || this.keys.has("arrowdown");
-    const left = this.keys.has("a") || this.keys.has("arrowleft");
-    const right = this.keys.has("d") || this.keys.has("arrowright");
-
-    this.throttle = fwd ? 1 : 0;
-    this.brake = back ? 1 : 0;
-    this.steerTarget = (left ? -1 : 0) + (right ? 1 : 0);
-    this.handbrake = this.keys.has(" ");
-    this.boost = this.keys.has("shift");
+  private recompute() {
     this.reset = this.keys.has("r");
+    this.forward = this.touchForward || this.keys.has("w") || this.keys.has("arrowup");
+    this.backward = this.touchBackward || this.keys.has("s") || this.keys.has("arrowdown");
+    this.left = this.touchLeft || this.keys.has("a") || this.keys.has("arrowleft");
+    this.right = this.touchRight || this.keys.has("d") || this.keys.has("arrowright");
+    this.handbrake = this.touchHandbrake || this.keys.has(" ");
   }
 
-  /** Call once per frame from the game loop to smooth keyboard steering. */
-  update(dt: number) {
-    if (!this.touchSteerActive) {
-      const rate = 6; // higher = snappier
-      const diff = this.steerTarget - this.steer;
-      const step = Math.sign(diff) * Math.min(Math.abs(diff), rate * dt);
-      this.steer += step;
-    }
+  /** Wire an on-screen button element to a "hold" action (gas/brake/steer/handbrake). */
+  bindHoldButton(el: HTMLElement, setter: (v: boolean) => void) {
+    const activePointers = new Set<number>();
+
+    const start = (e: PointerEvent) => {
+      e.preventDefault();
+      activePointers.add(e.pointerId);
+      el.setPointerCapture(e.pointerId);
+      el.classList.add("active");
+      setter(true);
+      this.recompute();
+    };
+    const end = (e: PointerEvent) => {
+      activePointers.delete(e.pointerId);
+      if (activePointers.size === 0) {
+        el.classList.remove("active");
+        setter(false);
+        this.recompute();
+      }
+    };
+
+    el.addEventListener("pointerdown", start, { passive: false });
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+    el.addEventListener("lostpointercapture", end);
   }
 
-  private touchSteerActive = false;
-
-  private setupTouchControls() {
-    const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
-    const wrap = document.getElementById("touch-controls");
-    if (!wrap) return;
-    if (!isTouch) {
-      wrap.style.display = "none";
-      return;
-    }
-    wrap.style.display = "flex";
-
-    // --- Steering joystick (left side) ---
-    const stickBase = document.getElementById("stick-base") as HTMLElement;
-    const stickKnob = document.getElementById("stick-knob") as HTMLElement;
-    let stickTouchId: number | null = null;
-    let baseRect: DOMRect;
-    const maxRadius = 46;
-
-    const stickStart = (id: number, x: number, y: number) => {
-      stickTouchId = id;
-      baseRect = stickBase.getBoundingClientRect();
-      stickMove(x, y);
-    };
-    const stickMove = (x: number, y: number) => {
-      const cx = baseRect.left + baseRect.width / 2;
-      const cy = baseRect.top + baseRect.height / 2;
-      let dx = x - cx;
-      let dy = y - cy;
-      const dist = Math.min(Math.sqrt(dx * dx + dy * dy), maxRadius);
-      const angle = Math.atan2(dy, dx);
-      dx = Math.cos(angle) * dist;
-      dy = Math.sin(angle) * dist;
-      stickKnob.style.transform = `translate(${dx}px, ${dy}px)`;
-      this.touchSteerActive = true;
-      this.steer = Math.max(-1, Math.min(1, dx / maxRadius));
-    };
-    const stickEnd = () => {
-      stickTouchId = null;
-      stickKnob.style.transform = `translate(0px, 0px)`;
-      this.touchSteerActive = true;
-      this.steer = 0;
-    };
-
-    stickBase.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      const t = e.changedTouches[0];
-      stickStart(t.identifier, t.clientX, t.clientY);
-    }, { passive: false });
-    stickBase.addEventListener("touchmove", (e) => {
-      e.preventDefault();
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === stickTouchId) stickMove(t.clientX, t.clientY);
-      }
-    }, { passive: false });
-    stickBase.addEventListener("touchend", (e) => {
-      e.preventDefault();
-      for (const t of Array.from(e.changedTouches)) {
-        if (t.identifier === stickTouchId) stickEnd();
-      }
-    }, { passive: false });
-    stickBase.addEventListener("touchcancel", (e) => {
-      e.preventDefault();
-      stickEnd();
-    }, { passive: false });
-
-    // --- Pedals + handbrake (right side) ---
-    const bindHold = (elId: string, onDown: () => void, onUp: () => void) => {
-      const el = document.getElementById(elId);
-      if (!el) return;
-      const down = (e: Event) => {
+  /** Wire a tap-only button (e.g. reset). */
+  bindTapButton(el: HTMLElement, onTap: () => void) {
+    el.addEventListener(
+      "pointerdown",
+      (e) => {
         e.preventDefault();
-        el.classList.add("pressed");
-        onDown();
-      };
-      const up = (e: Event) => {
-        e.preventDefault();
-        el.classList.remove("pressed");
-        onUp();
-      };
-      el.addEventListener("touchstart", down, { passive: false });
-      el.addEventListener("touchend", up, { passive: false });
-      el.addEventListener("touchcancel", up, { passive: false });
-      // Also support mouse for desktop testing of the touch UI.
-      el.addEventListener("mousedown", down);
-      window.addEventListener("mouseup", up);
-    };
+        el.classList.add("active");
+        onTap();
+      },
+      { passive: false },
+    );
+    const clear = () => el.classList.remove("active");
+    el.addEventListener("pointerup", clear);
+    el.addEventListener("pointercancel", clear);
+    el.addEventListener("lostpointercapture", clear);
+  }
 
-    bindHold("btn-gas", () => (this.throttle = 1), () => (this.throttle = 0));
-    bindHold("btn-brake", () => (this.brake = 1), () => (this.brake = 0));
-    bindHold("btn-handbrake", () => (this.handbrake = true), () => (this.handbrake = false));
-    bindHold("btn-boost", () => (this.boost = true), () => (this.boost = false));
-
-    const resetBtn = document.getElementById("btn-reset");
-    resetBtn?.addEventListener("touchstart", (e) => {
-      e.preventDefault();
-      this.reset = true;
-      window.setTimeout(() => (this.reset = false), 100);
-    }, { passive: false });
+  setTouchForward(v: boolean) {
+    this.touchForward = v;
+  }
+  setTouchBackward(v: boolean) {
+    this.touchBackward = v;
+  }
+  setTouchLeft(v: boolean) {
+    this.touchLeft = v;
+  }
+  setTouchRight(v: boolean) {
+    this.touchRight = v;
+  }
+  setTouchHandbrake(v: boolean) {
+    this.touchHandbrake = v;
   }
 }

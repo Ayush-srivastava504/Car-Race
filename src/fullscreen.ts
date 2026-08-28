@@ -174,7 +174,6 @@ export function setupFullscreen() {
   };
 
   btn.addEventListener("click", toggle);
-  btn.addEventListener("touchend", toggle, { passive: false });
 
   ["fullscreenchange", "webkitfullscreenchange", "mozfullscreenchange", "MSFullscreenChange"].forEach(
     (evt) => document.addEventListener(evt, syncIcon)
