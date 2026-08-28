@@ -1,129 +1,369 @@
 # CF Car Race
 
-A browser-based 3D time-trial car racing game (Three.js + cannon-es),
-architected to run entirely on the **Cloudflare Workers free plan**.
+CF Car Race is a browser-based 3D time-trial game built with Three.js,
+Cannon-es, TypeScript, Vite, and Cloudflare Workers. Drive a low-poly car
+around a procedurally generated closed circuit, complete three laps, and beat
+your personal best.
 
-- All rendering, physics, and game logic run **client-side** in the browser.
-- The Worker's only jobs: serve the static build, and optionally run a tiny
-  stateless leaderboard API (Workers KV) — no live game state on the server,
-  no Durable Objects, no persistent process.
+The game is deliberately client-heavy: rendering, physics, input, timing, and
+race rules run in the browser. Cloudflare serves the compiled static site and
+provides an optional, stateless best-lap API backed by Workers KV.
 
-Current state: a drivable box-car placeholder on a procedurally generated
-closed-loop circuit, with checkpoints, lap timing, best-lap tracking
-(localStorage), a chase camera, barriers, and basic scenery. This is the
-MVP scaffold described in the build prompt — swap in real glTF models and
-tune physics from here.
+> Current status: playable MVP. The car and track are generated from geometry
+> in TypeScript. `public/models/` exists for future model assets, but the current
+> build does not require external glTF files.
 
-## Project layout
+## Features
 
-```
-├── src/                # Browser app (Vite + TS + Three.js + cannon-es)
-│   ├── main.ts          # Scene/camera/physics setup, game loop
-│   ├── car.ts            # Vehicle: RaycastVehicle physics + placeholder mesh
-│   ├── track.ts           # Procedural track ribbon, barriers, checkpoints
-│   ├── input.ts             # Keyboard input state
-│   ├── hud.ts                 # DOM HUD bindings (speed/lap/time)
-│   └── leaderboard.ts           # Client for the optional Worker API
-├── worker/
-│   ├── worker.ts        # Stateless Worker: /api/leaderboard (GET/POST) via KV
-│   └── tsconfig.json    # Separate TS config (Workers runtime types)
-├── index.html            # HTML shell + HUD overlay markup/CSS
-├── wrangler.toml         # Static assets + Worker + KV binding config
-└── vite.config.ts
-```
+- Three-lap time trials with an automatic countdown (`3`, `2`, `1`, `GO!`).
+- Eight sequential checkpoints prevent simply cutting across the circuit.
+- Local best-lap persistence using `localStorage`.
+- Third-person chase camera with speed-sensitive field of view.
+- Cannon-es raycast vehicle physics with rear-wheel drive, suspension,
+  steering, braking, and handbrake behavior.
+- Procedural road ribbon, physical road segments, barriers, start/finish line,
+  grass, fog, and instanced trees.
+- Off-track grip and engine penalties, wrong-way warnings, and automatic
+  recovery when the car is airborne, fallen, or stuck.
+- Keyboard controls on desktop and pointer-based touch controls on phones and
+  tablets.
+- Fullscreen mode with wake lock where the browser supports those APIs.
+- Optional top-50 global leaderboard using a Cloudflare Worker and KV.
+- Mobile rendering adjustments: reduced pixel ratio and disabled shadows to
+  protect frame rate on touch devices.
+- Built-in race diagnostics for investigating physics and input issues.
+
+## Play
+
+### Desktop controls
+
+| Action | Keys |
+| --- | --- |
+| Accelerate | `W` or `Arrow Up` |
+| Reverse / brake | `S` or `Arrow Down` |
+| Steer left | `A` or `Arrow Left` |
+| Steer right | `D` or `Arrow Right` |
+| Handbrake | `Space` |
+| Reset and restart countdown | `R` |
+| Toggle race debugger | `T` or `D` |
+
+The reset icon is also available in the top-right corner. The fullscreen icon
+appears only when the browser exposes a compatible fullscreen API.
+
+### Touch controls
+
+On touch-capable devices, the game shows on-screen buttons for left, right,
+gas, brake, and handbrake. Hold a button to keep the action active. Touch and
+keyboard input share the same internal input state, so a device can support
+both input sources without one releasing the other accidentally.
+
+### Race behavior
+
+The timer starts after the countdown finishes. Passing checkpoints in order
+advances the lap, and completing lap three ends the run. A new personal best is
+stored locally and submitted to the optional leaderboard API. The race restarts
+automatically after the finish message.
+
+Leaving the paved ribbon displays `OFF TRACK` and reduces tire grip and engine
+authority. Driving quickly against the computed centerline direction displays
+`WRONG WAY`. If the vehicle loses ground contact or remains nearly stationary
+while the player is trying to drive, it is returned to the start line after a
+short recovery delay.
+
+## Requirements
+
+- Node.js 18 or newer is recommended for the Vite and Wrangler toolchain.
+- A modern browser with WebGL support.
+- npm, or another package manager that can install the dependencies from
+  `package.json`.
+
+The game itself has no account system and does not require a server for local
+play. A browser with `localStorage` disabled will lose its best time between
+loads.
 
 ## Local development
+
+Install dependencies and start Vite:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the printed local URL (default `http://localhost:5173`). Controls:
-**WASD / Arrow keys** to drive, **Space** to handbrake, **R** to reset to
-the start line.
+Open the URL printed by Vite. The configured default is
+`http://localhost:5173`.
 
-The leaderboard API isn't available under `npm run dev` (that's pure Vite,
-no Worker runtime) — `submitScore`/`fetchLeaderboard` fail silently and the
-game keeps using `localStorage` for your best lap. To test the API locally,
-run the Worker separately:
+### Production preview
+
+Build the client and serve the generated `dist/` directory through Vite's
+preview server:
 
 ```bash
-npm run worker:dev   # runs `wrangler dev`, serves the Worker on its own port
+npm run build
+npm run preview
 ```
 
-## Deploying to Cloudflare (free plan)
+`npm run build` runs both TypeScript project checks and `vite build`. The
+generated output is written to `dist/`.
 
-1. **Install Wrangler & log in** (already a devDependency, so `npx` finds it):
+### Running the Worker locally
+
+`npm run dev` runs pure Vite. It does not run the Worker runtime, so requests
+to `/api/leaderboard` are unavailable in that mode. The client intentionally
+handles this gracefully: leaderboard requests fail silently and local best
+times continue to work.
+
+To run Wrangler's Worker development server instead:
+
+```bash
+npm run worker:dev
+```
+
+Wrangler uses `wrangler.toml`, including the configured preview KV namespace.
+The exact local URL is printed by Wrangler. For a browser session to use the
+API and static assets together, use the deployed environment or configure a
+local proxy that routes the Vite client to the Worker; Vite itself does not
+automatically emulate Worker bindings.
+
+## Deploy to Cloudflare Workers
+
+The project is configured as one Worker deployment with static assets. The
+`assets` binding serves the contents of `dist/`, while the Worker handles
+`/api/*` requests.
+
+1. Authenticate Wrangler:
+
    ```bash
    npx wrangler login
    ```
-2. **(Optional) Create the KV namespace for the leaderboard**, if you want
-   scores to sync beyond `localStorage`:
+
+2. Confirm the `name`, `main`, and asset settings in `wrangler.toml`.
+
+3. Build and deploy:
+
    ```bash
-   npx wrangler kv namespace create LEADERBOARD
+   npm run deploy
    ```
-   This prints an `id`. Paste it into `wrangler.toml` under
-   `[[kv_namespaces]]` → `id = "..."`. For local `wrangler dev` testing,
-   also create a preview namespace:
-   ```bash
-   npx wrangler kv namespace create LEADERBOARD --preview
-   ```
-   and paste that into `preview_id`. If you skip this step entirely, the
-   game still works — it just won't sync a global leaderboard.
-3. **Build the static site:**
+
+   This is equivalent to:
+
    ```bash
    npm run build
-   ```
-   This runs `tsc -b` then `vite build`, producing `dist/`.
-4. **Deploy:**
-   ```bash
    npx wrangler deploy
    ```
-   Wrangler reads `wrangler.toml`: it uploads `dist/` as static assets
-   (served at the edge, no Worker invocation needed for `/`, JS/CSS/glTF
-   files, etc.) and deploys `worker/worker.ts` to handle `/api/*`.
 
-Or use the combined helper: `npm run deploy` (build + deploy in one step).
+The deployed site does not need a Pages project. `wrangler.toml` uses the
+Worker's static asset binding and SPA fallback for non-API requests.
 
-## Free-plan limits that apply here
+### Configure leaderboard KV
 
-Cloudflare's limits can change — check
-[developers.cloudflare.com/workers/platform/limits](https://developers.cloudflare.com/workers/platform/limits/)
-before you rely on exact numbers — but as of this writing, on the Workers
-Free plan:
+The repository currently contains production and preview KV IDs in
+`wrangler.toml`. If deploying to a different Cloudflare account, create new
+namespaces and replace those values:
 
-| Resource | Free-tier limit | Relevance here |
-|---|---|---|
-| Worker requests | 100,000/day (account-wide) | Only `/api/leaderboard` calls hit this — static asset requests are served from Cloudflare's edge cache and aren't counted the same way. A casual leaderboard won't come close. |
-| Worker CPU time | 10ms per request | Fine for parsing a small JSON body and doing one KV read/write. **Not** enough for a server-authoritative game loop — this is exactly why all physics/rendering stays client-side. |
-| Workers KV reads | 100,000/day | Every `GET /api/leaderboard` is one read. |
-| Workers KV writes | 1,000/day | Every lap submission (`POST /api/leaderboard`) is one write. This is the tightest limit — if the game gets popular, ~1,000 best-lap submissions/day is the ceiling before you'd need to batch writes, add client-side throttling (e.g. only submit if it beats your previous best), or move to D1/a paid plan. |
-| Workers KV storage | 1 GB total | The whole leaderboard is one small JSON blob (top 50 entries) — effectively unlimited for this use case. |
-| Static asset payload | Practically large, but slow to load if bloated | Keep glTF/texture sizes modest for fast first paint, especially on mobile — see "Performance" below. |
+```bash
+npx wrangler kv namespace create LEADERBOARD
+npx wrangler kv namespace create LEADERBOARD --preview
+```
 
-If you outgrow KV's write quota, swap `worker/worker.ts` to use **D1**
-(Cloudflare's serverless SQLite, also free-tier eligible) for proper
-ranked queries — the Worker stays just as stateless either way.
+Copy the returned IDs into the `id` and `preview_id` fields of the
+`[[kv_namespaces]]` block. The binding name must remain `LEADERBOARD`, because
+both `worker/worker.ts` and `wrangler.toml` depend on it.
 
-## What's next (stretch goals, not yet implemented)
+If KV is not configured, the client still runs as an offline time trial. The
+optional leaderboard calls catch network failures and do not block gameplay.
 
-- Replace the box placeholder and geometry track with real low-poly glTF
-  models (car + track), loaded via `GLTFLoader`.
-- Ghost replay of your best lap (record a transform buffer, play it back
-  as a semi-transparent car).
-- Ranked global leaderboard UI reading from `/api/leaderboard`.
-- WebRTC peer-to-peer racing (no server authority — matches the
-  free-plan-friendly architecture).
-- Post-processing (bloom/motion blur) — only if frame rate holds up on
-  mid-range hardware; profile before adding.
+## Leaderboard API
 
-## Performance notes
+The API is implemented in `worker/worker.ts` and uses one KV key,
+`leaderboard:top`. Entries are sorted by ascending `timeMs` and trimmed to the
+best 50 records.
 
-- Target 60fps on mid-range laptops/phones. Profile with the browser's
-  performance panel early — the current scaffold uses instanced meshes
-  for barriers/trees specifically to keep draw calls low as you add more
-  scenery.
-- Keep future glTF assets low-poly and texture-light; large payloads hurt
-  first-load time more than they hurt Cloudflare's static-asset limits
-  (which are generous), so treat this as a UX concern, not just a quota one.
+### Read scores
+
+```http
+GET /api/leaderboard?limit=10
+```
+
+The `limit` is clamped to the top 50 entries. A successful response is an array:
+
+```json
+[
+  {
+    "name": "Player",
+    "timeMs": 92345.25,
+    "createdAt": 1727000000000
+  }
+]
+```
+
+### Submit a score
+
+```http
+POST /api/leaderboard
+Content-Type: application/json
+
+{"name":"Player","timeMs":92345.25}
+```
+
+Names are converted to strings and truncated to 24 characters. Times must be
+finite, greater than zero, and no more than 30 minutes. A valid submission
+returns:
+
+```json
+{"ok":true}
+```
+
+Invalid JSON or invalid times return a `400` response. Unknown `/api/*` paths
+return `404`. CORS is open with `Access-Control-Allow-Origin: *`, and OPTIONS
+requests are supported.
+
+The current client submits only when a new local best is achieved. There is no
+authentication, anti-cheat validation, duplicate-name handling, or ranked UI
+in the current MVP, so the API should be treated as a casual scoreboard rather
+than a trusted competition service.
+
+## Architecture
+
+```text
+Browser
+  main.ts
+    Three.js scene and renderer
+    Cannon-es world and fixed-step vehicle simulation
+    race state, checkpoints, timing, camera, and recovery
+  car.ts        raycast vehicle and visual car mesh
+  track.ts      procedural geometry and collision bodies
+  input.ts      keyboard and pointer/touch input
+  hud.ts        DOM HUD updates and time formatting
+  fullscreen.ts fullscreen and wake-lock integration
+  leaderboard.ts optional /api/leaderboard client
+  debugger.ts   toggleable physics/input diagnostics
+
+Cloudflare Worker
+  static assets from dist/ via the ASSETS binding
+  /api/leaderboard via worker.ts and Workers KV
+```
+
+### Simulation details
+
+- The track is generated from closed Catmull-Rom waypoints and sampled into a
+  smooth centerline.
+- The visible road is a Three.js ribbon. Matching overlapping static Cannon
+  boxes provide the physical road surface.
+- Barrier visuals are instanced for fewer draw calls. Dense static collision
+  chains follow both road edges.
+- Cannon's `RaycastVehicle` uses four wheels, front-wheel steering, and rear
+  engine force. The chassis permits yaw but constrains pitch and roll to keep
+  the vehicle stable on the generated surface.
+- The render loop advances physics with a fixed `1 / 60` simulation step and
+  caps frame delta to avoid large catch-up steps.
+- When the document is hidden, elapsed race time is paused and the animation
+  loop does not attempt to catch up after the tab becomes visible.
+
+## Project structure
+
+```text
+.
+├── index.html             HTML shell, HUD markup, touch controls, and CSS
+├── package.json           npm scripts and dependencies
+├── tsconfig.json          client TypeScript configuration
+├── vite.config.ts         Vite root, asset directory, and build settings
+├── wrangler.toml          Worker, static assets, and KV configuration
+├── public/
+│   └── models/            reserved for future car/track model assets
+├── src/
+│   ├── main.ts            scene setup, race state, loop, and camera
+│   ├── car.ts             vehicle physics and car mesh
+│   ├── track.ts           procedural track and collision geometry
+│   ├── input.ts           keyboard and touch input abstraction
+│   ├── hud.ts             speed, lap, timing, and status messages
+│   ├── leaderboard.ts     optional Worker API client
+│   ├── fullscreen.ts      fullscreen and wake lock behavior
+│   ├── deviceInfo.ts      shared device capability detection
+│   └── debugger.ts        runtime race diagnostics
+└── worker/
+    ├── worker.ts          static-asset fallback and leaderboard API
+    └── tsconfig.json      Cloudflare Worker TypeScript configuration
+```
+
+## npm scripts
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Start the Vite development server on port 5173. |
+| `npm run build` | Type-check the client and produce `dist/`. |
+| `npm run preview` | Preview the built client locally with Vite. |
+| `npm run worker:dev` | Start Wrangler's local Worker development server. |
+| `npm run deploy` | Build the client and deploy the Worker with Wrangler. |
+
+## Debugging
+
+Press `T` or `D` during play to toggle the race debugger. It reports race
+state, active inputs, speed, velocity, position, wheel-ground contact,
+off-track status, sleeping state, and the stuck-recovery timer.
+
+Useful browser diagnostics include the console warning emitted when all wheel
+raycasts lose ground contact and the browser Performance panel for frame-time
+and draw-call investigation.
+
+## Performance and compatibility
+
+The target is approximately 60 FPS on mid-range laptops and phones. The
+mobile path caps device pixel ratio at 1.5 and disables shadows; desktop uses
+up to a 2.0 pixel ratio and directional-light shadows. Barriers and trees use
+instanced meshes to keep scenery inexpensive.
+
+When adding art or effects:
+
+- Keep models low-poly and textures small.
+- Profile on a representative phone, not only a desktop GPU.
+- Avoid adding per-frame allocations to the simulation loop.
+- Keep the visual road and physical road geometry aligned.
+- Test both keyboard and multi-pointer touch input after input changes.
+
+Fullscreen and wake lock are progressive enhancements. Unsupported browsers
+hide the fullscreen control and remain playable in the normal viewport.
+
+## Known limitations and roadmap
+
+These are not part of the current MVP:
+
+- Real car and track glTF models loaded through `GLTFLoader`.
+- Ghost replay of a best lap.
+- A ranked leaderboard screen in the game UI.
+- Multiplayer or peer-to-peer racing.
+- Post-processing such as bloom or motion blur.
+- Authenticated or anti-cheat-protected score submissions.
+
+If leaderboard traffic grows beyond KV's write pattern, move score storage to
+Cloudflare D1 or another database that supports proper ranked queries. Keep
+the Worker request-scoped and out of the real-time simulation path unless the
+game architecture changes intentionally.
+
+## Cloudflare free-plan considerations
+
+Cloudflare limits change over time. Check the current
+[Workers limits documentation](https://developers.cloudflare.com/workers/platform/limits/)
+before relying on a quota. This design keeps the expensive real-time work in
+the browser; the Worker only performs small JSON and KV operations.
+
+The relevant current design constraints are:
+
+- KV stores one small JSON blob containing at most 50 entries.
+- Every leaderboard read consumes a KV read.
+- Every accepted score consumes a KV write.
+- Static files are deployed from `dist/` through the asset binding.
+- The API is not authoritative: clients can fabricate score submissions.
+
+## Contributing
+
+1. Install dependencies with `npm install`.
+2. Make a focused change in `src/` or `worker/`.
+3. Run `npm run build` before opening a change.
+4. Test a complete three-lap run, reset behavior, off-track behavior, and the
+   relevant desktop or touch controls.
+5. For deployment changes, test both `npm run build` and `npm run worker:dev`.
+
+Keep generated output such as `dist/` out of source changes unless the
+deployment workflow explicitly requires it. No license file is currently
+declared in this repository.
